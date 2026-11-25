@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Executive Ticket Analysis Dashboard</title>
+<style>
+:root{color-scheme:light;--ink:#172b4d;--muted:#52657d;--line:#d7e0ea;--blue:#1769aa;--teal:#148078;--page:#f3f6fa}
+*{box-sizing:border-box}body{margin:0;background:var(--page);color:var(--ink);font:15px/1.5 system-ui,sans-serif}
+header{background:#173b63;color:#fff;padding:22px max(18px,calc((100% - 1450px)/2))}header h1{margin:0}header p{margin:4px 0 0;color:#e0ebf7}
+main{max-width:1450px;margin:auto;padding:20px}.card,.toolbar,.filters,.notice{background:#fff;border:1px solid var(--line);border-radius:10px;box-shadow:0 2px 8px #19365412;padding:15px;margin:12px 0}
+.toolbar,.controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.toolbar input[type=file]{max-width:100%}
+button,select,input,textarea{font:inherit;color:var(--ink);border:1px solid #9aabba;border-radius:6px;background:#fff;padding:8px 10px}button{cursor:pointer;font-weight:650}button:hover{background:#e8f2fb}
+#loadCsv{background:#124a77;color:white}#loadCsv:hover{background:#0b3558}
+#loadStatus{flex:1 1 100%;padding:10px 12px;background:#edf2f7;border-left:4px solid #52657d;overflow-wrap:anywhere}
+#loadStatus[data-state=success]{background:#eaf6ef;border-color:#19754b;color:#105b38}#loadStatus[data-state=error]{background:#fff0f0;border-color:#a43434;color:#842626}
+.filters{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}.filters label{display:grid;gap:4px;color:var(--muted);font-weight:650}.filters input,.filters select{width:100%;min-width:0}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,400px),1fr));gap:12px}.chart{background:#fff;border:1px solid var(--line);border-radius:10px;padding:15px;min-width:0}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px}.kpi{background:#fff;border:1px solid var(--line);border-radius:9px;padding:14px}.kpi strong{display:block;font-size:1.5rem}.muted{color:var(--muted)}
+table{border-collapse:collapse;width:100%;min-width:850px}th,td{text-align:left;padding:8px;border-bottom:1px solid var(--line);vertical-align:top}th{position:sticky;top:0;background:#edf2f7}.scroll{max-height:600px;overflow:auto;border:1px solid var(--line);border-radius:8px;background:white}
+.chart svg{width:100%;height:auto;display:block}.chart-item{display:block;width:100%;text-align:left;margin:5px 0}.error-inline{padding:10px;color:#842626;background:#fff0f0;border-left:4px solid #a43434;border-radius:5px}.hidden{display:none!important}
+dialog{width:min(850px,calc(100% - 24px));max-height:90vh;overflow:auto;border:1px solid var(--line);border-radius:12px;padding:18px}dialog::backdrop{background:#0b1e33a8}.detail-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px}.detail-field{background:#f5f8fb;padding:8px;border-radius:6px;overflow-wrap:anywhere}
+@media(max-width:600px){main{padding:12px}header{padding:18px 12px}.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header><h1>Executive Ticket Analysis Dashboard</h1><p>Dynamic CSV-driven ticket analysis, drill-down, and browser-local follow-up tracking</p></header>
+<main>
+<p class="muted">Load a ServiceNow ticket CSV. Data is processed locally in this browser.</p>
+<section class="toolbar" aria-label="Load and export ticket data">
+<label for="csvFile">Choose ticket CSV</label><input id="csvFile" type="file" accept=".csv,text/csv">
+<button id="loadCsv" type="button">Load CSV</button><button id="exportFiltered" type="button" disabled>Export filtered tickets (CSV)</button><button id="exportFollowups" type="button">Download local follow-up backup (CSV)</button>
+<div id="loadStatus" role="status" aria-live="polite" data-state="info">No CSV loaded. Choose a file, then click “Load CSV”.</div>
+</section>
+<div class="notice"><strong>Local-only dashboard.</strong> No network requests, external libraries, server, or backend are used. Follow-up notes are stored only in this browser and never update the service desk.</div>
+<div id="emptyPrompt" class="card"><h2>Load ticket data to begin</h2><p>Choose a CSV file. Filters, charts, turnaround summaries, and ticket rows are calculated from its contents.</p></div>
+<div id="dashboard" hidden>
+<section id="filterBar" class="filters" aria-label="Ticket filters" hidden>
+<label>Search by Bug / Ticket ID<input id="idSearch" type="search" placeholder="Enter one or more ticket IDs" autocomplete="off"></label>
+<label>Business Unit<select id="businessFilter"></select></label><label>Status<select id="statusFilter"></select></label><label>Priority<select id="priorityFilter"></select></label>
+<label>Category<select id="categoryFilter"></select></label><label>Question area<select id="questionFilter"></select></label><label>Company<select id="companyFilter"></select></label>
+<label>Caller<select id="callerFilter"></select></label><label>Assigned to<select id="assigneeFilter"></select></label><label>Waiting for<select id="waitingFilter"></select></label>
+<label>Created from<input id="createdFrom" type="date"></label><label>Created to<input id="createdTo" type="date"></label>
+<label>Free-text search<input id="searchFilter" type="search" placeholder="Search ticket data"></label>
+<button id="clearFilters" type="button">Clear all filters</button><div id="filterSummary" class="muted" aria-live="polite"></div>
+</section>
+<div id="notices"></div>
+<section><h2>Ticket tracker &amp; drill-down</h2><div class="controls"><label>Rows per page <select id="pageSize"><option selected>3</option><option>5</option><option>10</option><option>25</option><option>50</option></select></label><span id="pageInfo" aria-live="polite"></span><button id="prevPage">Previous</button><button id="nextPage">Next</button></div>
+<div class="scroll"><table aria-label="Filtered ticket list"><thead><tr id="tableHead"></tr></thead><tbody id="ticketRows"></tbody></table><p id="emptyTickets" class="muted"></p></div></section>
+<section><h2>Executive summary</h2><div id="kpis" class="kpis"></div></section>
+<section><h2>Ticket analytics</h2><p class="muted">Charts update with active filters. Select a bar to drill into matching tickets; clear filters to reset.</p>
+<div class="grid">
+<article class="chart" id="cardStatus"><h3>Ticket status</h3><div id="statusChart"></div></article>
+<article class="chart" id="cardPriority"><h3>Priority</h3><div id="priorityChart"></div></article>
+<article class="chart" id="cardMonthly"><h3>Monthly ticket intake</h3><div id="monthlyChart"></div></article>
+<article class="chart" id="cardHistogram"><h3>Closed-ticket turnaround distribution</h3><div id="histogramChart"></div></article>
+<article class="chart" id="cardEcdf"><h3>Time-to-close cumulative curve</h3><div id="ecdfChart"></div></article>
+<article class="chart" id="cardBusiness"><h3>Business Unit</h3><div id="businessChart"></div></article>
+<article class="chart" id="cardAssignees"><h3>Top 10 assignees by ticket count</h3><div id="assigneeChart"></div></article>
+<article class="chart" id="cardAge"><h3>Open/backlog ageing</h3><div id="ageChart"></div></article>
+</div></section>
+<section><h2>All-closed-ticket turnaround</h2><div class="card" id="allClosedSummary"></div><div class="card" id="allClosedBuckets"></div></section>
+<section><h2>Methodology &amp; data quality</h2><ul id="methodologyList"></ul></section>
+<footer class="muted">Ticket analysis dashboard · Static, local-only HTML · CSV contents remain in the browser</footer>
+</div>
+</main>
+<dialog id="ticketDialog"><h2 id="dialogTitle">Ticket details</h2><p id="detailMeta" class="muted"></p><div id="detailFields" class="detail-grid"></div><section><h3>Local follow-up tracker</h3><p class="muted">Progress and notes are stored locally only; they do not change source status.</p><label>Follow-up progress <select id="followProgress"><option>Not started</option><option>In progress</option><option>Waiting</option><option>Done</option></select></label><p><textarea id="followNotes" rows="4" style="width:100%" aria-label="Follow-up notes"></textarea></p><button id="saveFollowup">Save local follow-up</button> <button id="closeDialog">Close details</button></section></dialog>
+<script>
+document.addEventListener("DOMContentLoaded", function dashboardReady() {
+"use strict";
+const $=id=>document.getElementById(id), statusBox=$("loadStatus");
+const required=["Number","Created","Status","Updated"];
+const aliases={businessunit:"Business Unit",businessunitname:"Business Unit",ubusinessunit:"Business Unit",number:"Number",ticketnumber:"Number",ticketno:"Number",ticketid:"Number",created:"Created",createdat:"Created",creationdate:"Created",createddate:"Created",syscreatedon:"Created",priority:"Priority",caller:"Caller",ucallerid:"Caller",status:"Status",state:"Status",waitingfor:"Waiting for",uawaitingfor:"Waiting for",questionarea:"Question area",uquestionarea:"Question area",category:"Category",ucategory:"Category",title:"Title",shortdescription:"Title",assignedto:"Assigned to",assignee:"Assigned to",updated:"Updated",updatedat:"Updated",lastupdated:"Updated",updateddate:"Updated",sysupdatedon:"Updated",updatedby:"Updated by",sysupdatedby:"Updated by",company:"Company",companyname:"Company",ucalleridcompany:"Company"};
+const buckets=[["<1 day",0,0],["1–8 days",1,8],["9–15 days",9,15],["16–20 days",16,20],["21–30 days",21,30],[">30 days",31,Infinity]];
+let rows=[],headers=[],filtered=[],sortKey="Number",sortAsc=true,page=1,closureField=null,drill=null,selected=null,chartError=false;
+function showStatus(text,kind){if(statusBox){statusBox.textContent=text;statusBox.dataset.state=kind||"info"}}
+function reportError(message){showStatus("Dashboard script error: "+message,"error")}
+window.addEventListener("error",e=>reportError(e.message||"Unknown JavaScript error"));
+window.addEventListener("unhandledrejection",e=>reportError(String(e.reason||"Unhandled promise rejection")));
+function safe(id,fn){const node=$(id);if(!node)return;try{fn(node)}catch(e){node.innerHTML='<div class="error-inline">This section could not be rendered: '+esc(e.message||e)+'</div>';console.error(e)}}
+function esc(x){return String(x==null?"":x).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
+function norm(x){return String(x==null?"":x).trim().toLowerCase()}
+function keyHeader(x){return String(x||"").replace(/^\uFEFF/,"").replace(/^["']+|["']+$/g,"").toLowerCase().replace(/[\s_-]+/g,"").replace(/[^\w.]/g,"")}
+function csvParse(text,delimiter){let out=[],row=[],cell="",quoted=false;for(let i=0;i<text.length;i++){let c=text[i];if(quoted){if(c==='"'&&text[i+1]==='"'){cell+='"';i++}else if(c==='"')quoted=false;else cell+=c}else if(c==='"'&&!cell.trim())quoted=true;else if(c===delimiter){row.push(cell);cell=""}else if(c==="\r"||c==="\n"){if(c==="\r"&&text[i+1]==="\n")i++;row.push(cell);if(row.some(v=>v.trim()))out.push(row);row=[];cell=""}else cell+=c}if(quoted)throw Error("CSV contains an unclosed quoted field");row.push(cell);if(row.some(v=>v.trim()))out.push(row);return out}
+function delimiterOf(text){let line=text.split(/\r\n|\n|\r/).find(x=>x.trim())||"";let options=[",",";","\t","|"];return options.map(d=>{let q=false,n=0;for(let i=0;i<line.length;i++){if(line[i]==='"'&&line[i+1]==='"'&&q)i++;else if(line[i]==='"')q=!q;else if(line[i]===d&&!q)n++}return[d,n]}).sort((a,b)=>b[1]-a[1])[0][0]}
+function parse(text){text=String(text||"").replace(/^\uFEFF/,"");let lines=text.split(/\r\n|\n|\r/),sep=lines[0]&&lines[0].match(/^\s*sep\s*=\s*(.)/i);if(sep)text=lines.slice(1).join("\n");let delim=sep?sep[1]:delimiterOf(text),data=csvParse(text,delim);if(!data.length)throw Error("CSV is empty. Detected delimiter: "+(delim==="\t"?"tab":delim));headers=data.shift().map(x=>String(x||"").replace(/^\uFEFF/,"").trim().replace(/^["']+|["']+$/g,""));let mapped=headers.map(h=>aliases[keyHeader(h)]||(/^(u_caller_id\.company)$/i.test(h)?"Company":null));let missing=required.filter(x=>!mapped.includes(x));if(missing.length)throw Error("Missing required fields: "+missing.join(", ")+". Detected delimiter: "+(delim==="\t"?"tab":delim)+". Parsed headers: "+headers.join(" | "));let result=data.map(cells=>{let r={};headers.forEach((h,i)=>{r[h]=cells[i]||"";if(mapped[i]&&!Object.prototype.hasOwnProperty.call(r,mapped[i]))r[mapped[i]]=cells[i]||""});if(!("Company"in r))r.Company="";return r});return{result,delimiter:delim}}
+function date(x){if(!x)return null;let d=new Date(x);if(!isNaN(d))return d;let m=String(x).match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})/);if(m){let y=+m[3];if(y<100)y+=y<70?2000:1900;d=new Date(y,+m[1]-1,+m[2])}return isNaN(d)?null:d}
+function closed(r){return norm(r.Status)==="closed"}function resolved(r){return norm(r.Status)==="resolved"}
+function duration(r){if(!closed(r))return null;let a=date(r.Created),b=date(closureField?r[closureField]:r.Updated);return a&&b?(b-a)/86400000:null}
+function bucket(d){if(d==null||d<0)return null;let day=Math.floor(d);return buckets.findIndex(x=>day>=x[1]&&day<=x[2])}
+function matches(r){let val=id=>$(id)?.value||"";let terms=val("idSearch").toLowerCase().split(/[,\s;]+/).filter(Boolean);if(terms.length&&!terms.some(t=>norm(r.Number).includes(t)))return false;for(const [id,key] of [["businessFilter","Business Unit"],["statusFilter","Status"],["priorityFilter","Priority"],["categoryFilter","Category"],["questionFilter","Question area"],["companyFilter","Company"],["callerFilter","Caller"],["assigneeFilter","Assigned to"],["waitingFilter","Waiting for"]])if(val(id)&&String(r[key]||"")!==val(id))return false;let created=date(r.Created);if(val("createdFrom")&&(!created||created<new Date(val("createdFrom"))))return false;if(val("createdTo")&&(!created||created>new Date(val("createdTo")+"T23:59:59")))return false;let search=norm(val("searchFilter"));if(search&&!headers.some(h=>norm(r[h]).includes(search)))return false;if(drill&&drill.kind==="status"&&r.Status!==drill.value)return false;if(drill&&drill.kind==="priority"&&r.Priority!==drill.value)return false;if(drill&&drill.kind==="business"&&r["Business Unit"]!==drill.value)return false;if(drill&&drill.kind==="band"&&(!closed(r)||bucket(duration(r))!==drill.value))return false;return true}
+function populateFilters(){let defs=[["businessFilter","Business Unit","All business units"],["statusFilter","Status","All statuses"],["priorityFilter","Priority","All priorities"],["categoryFilter","Category","All categories"],["questionFilter","Question area","All question areas"],["companyFilter","Company","All companies"],["callerFilter","Caller","All callers"],["assigneeFilter","Assigned to","All assignees"],["waitingFilter","Waiting for","All waiting-for values"]];defs.forEach(([id,key,label])=>{let el=$(id);if(!el)return;let vals=[...new Set(rows.map(r=>r[key]||"Unspecified"))].sort();el.innerHTML='<option value="">'+esc(label)+'</option>'+vals.map(v=>'<option>'+esc(v)+'</option>').join("")})}
+function cardError(id,e){safe(id,n=>n.innerHTML='<div class="error-inline">Chart unavailable: '+esc(e.message||e)+'</div>')}
+function chart(id,title,data,drillKind){try{let el=$(id);if(!el)return;el.innerHTML="";if(!data.length){el.textContent="No tickets match the current filters.";return}let max=Math.max(1,...data.map(x=>x[1]));let svg=document.createElementNS("http://www.w3.org/2000/svg","svg");svg.setAttribute("viewBox","0 0 680 "+Math.max(100,data.length*36+25));svg.setAttribute("role","img");svg.setAttribute("aria-label",title);data.forEach(([label,count],i)=>{let y=i*36+6,w=420*count/max,txt=document.createElementNS("http://www.w3.org/2000/svg","text");txt.setAttribute("x","0");txt.setAttribute("y",y+17);txt.textContent=label.length>24?label.slice(0,22)+"…":label;svg.appendChild(txt);let bar=document.createElementNS(svg.namespaceURI,"rect");bar.setAttribute("x","180");bar.setAttribute("y",y);bar.setAttribute("width",Math.max(2,w));bar.setAttribute("height","24");bar.setAttribute("rx","4");bar.setAttribute("fill",i%2?"#148078":"#1769aa");bar.setAttribute("tabindex","0");bar.setAttribute("role","button");bar.setAttribute("aria-label",label+": "+count+" tickets; filter");bar.style.cursor="pointer";bar.onclick=()=>{drill={kind:drillKind,value:label};page=1;renderAll()};bar.onkeydown=e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();bar.click()}};svg.appendChild(bar);let n=document.createElementNS(svg.namespaceURI,"text");n.setAttribute("x",Math.min(620,185+w));n.setAttribute("y",y+17);n.textContent=String(count);svg.appendChild(n)});el.appendChild(svg)}catch(e){cardError(id,e)}}
+function grouped(list,key){let m=new Map();list.forEach(r=>{let v=r[key]||"Unspecified";m.set(v,(m.get(v)||0)+1)});return [...m].sort((a,b)=>b[1]-a[1])}
+function renderCharts(list){const stages=[["statusChart",()=>chart("statusChart","Ticket status",grouped(list,"Status"),"status")],["priorityChart",()=>chart("priorityChart","Priority",grouped(list,"Priority"),"priority")],["monthlyChart",()=>{let m=new Map();list.forEach(r=>{let d=date(r.Created);if(d){let k=d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");m.set(k,(m.get(k)||0)+1)}});chart("monthlyChart","Monthly ticket intake",[...m].sort(),null)}],["histogramChart",()=>chart("histogramChart","Closed-ticket turnaround",buckets.map((b,i)=>[b[0],list.filter(r=>closed(r)&&bucket(duration(r))===i).length]),"band")],["ecdfChart",()=>{let ds=list.filter(closed).map(duration).filter(x=>x!=null&&x>=0).sort((a,b)=>a-b);chart("ecdfChart","Time-to-close cumulative curve",[25,50,75,90].map(p=>[p+"% within "+(ds.length?ds[Math.max(0,Math.ceil(ds.length*p/100)-1)].toFixed(1):0)+" days",ds.length?Math.ceil(ds.length*p/100):0]),null)}],["businessChart",()=>chart("businessChart","Business Unit",grouped(list,"Business Unit"),"business")],["assigneeChart",()=>chart("assigneeChart","Top assignees",grouped(list,"Assigned to").slice(0,10),"assignee")],["ageChart",()=>chart("ageChart","Backlog ageing",buckets.map((b,i)=>[b[0],list.filter(r=>!closed(r)&&!resolved(r)&&bucket((Date.now()-(date(r.Created)||Date.now()))/86400000)===i).length]),null)]];stages.forEach(([id,fn])=>{try{fn()}catch(e){cardError(id,e)}})}
+function renderTable(list){
+safe("ticketRows",body=>{
+let size=+$("pageSize").value||3,total=Math.max(1,Math.ceil(list.length/size));page=Math.min(page,total);
+let cols=["Number","Title","Business Unit","Status","Priority","Category","Company","Assigned to","Created","Updated","Elapsed duration"];
+safe("tableHead",head=>head.innerHTML=cols.map(c=>'<th><button type="button" data-sort="'+esc(c)+'" aria-label="Sort by '+esc(c)+'">'+esc(c)+(sortKey===c?(sortAsc?" ▲":" ▼"):"")+'</button></th>').join(""));
+let sorted=[...list].sort((a,b)=>String(a[sortKey]||"").localeCompare(String(b[sortKey]||""),undefined,{numeric:true})*(sortAsc?1:-1));
+let start=(page-1)*size,visible=sorted.slice(start,start+size),singleId=(($("idSearch")?.value||"").trim().split(/[,\s;]+/).filter(Boolean).length===1&&list.length===1);
+body.innerHTML=visible.map((r,i)=>{
+let index=start+i,row='<tr tabindex="0" data-index="'+index+'">'+cols.map(c=>'<td>'+esc(c==="Elapsed duration"?(duration(r)==null?"—":duration(r).toFixed(2)+" days"):r[c]||"")+'</td>').join("")+'</tr>';
+if(singleId)row+='<tr class="inline-detail"><td colspan="'+cols.length+'"><strong>Ticket details — '+esc(r.Number)+'</strong><div class="detail-grid">'+headers.map(h=>'<div class="detail-field"><b>'+esc(h)+'</b>'+esc(r[h]||"—")+'</div>').join("")+'</div><button type="button" data-open-detail="'+index+'">Open follow-up tracker</button></td></tr>';
+return row
+}).join("");
+body.querySelectorAll("tr[data-index]").forEach(tr=>{const open=()=>openDetails(sorted[+tr.dataset.index]);tr.addEventListener("click",open);tr.addEventListener("keydown",e=>{if(e.key==="Enter")open()})});
+body.querySelectorAll("[data-open-detail]").forEach(btn=>btn.addEventListener("click",e=>{e.stopPropagation();openDetails(sorted[+btn.dataset.openDetail])}));
+$("emptyTickets").textContent=list.length?"":"No tickets match the current selection.";
+let first=list.length?start+1:0,last=Math.min(start+size,list.length);
+$("pageInfo").textContent="Showing "+first+"–"+last+" of "+list.length+" tickets · Page "+page+" of "+total;
+$("prevPage").disabled=page<=1;$("nextPage").disabled=page>=total
+})}
+function renderAll(){try{filtered=rows.filter(matches)}catch(e){reportError(e.message);filtered=[]}safe("filterSummary",n=>n.textContent=filtered.length+" matching tickets"+(drill?" · drill-down active":""));const closedRows=filtered.filter(closed),ds=closedRows.map(duration).filter(d=>d!=null&&d>=0);safe("kpis",n=>n.innerHTML=[["Filtered tickets",filtered.length],["Closed",closedRows.length],["Resolved",filtered.filter(resolved).length],["Not closed/resolved",filtered.filter(r=>!closed(r)&&!resolved(r)).length],["Mean closed turnaround",ds.length?(ds.reduce((a,b)=>a+b,0)/ds.length).toFixed(1)+" days":"—"]].map(([a,b])=>'<div class="kpi"><span class="muted">'+a+'</span><strong>'+b+'</strong></div>').join(""));renderCharts(filtered);safe("allClosedSummary",n=>n.textContent=closedRows.length+" closed tickets · "+ds.length+" valid durations · mean "+(ds.length?(ds.reduce((a,b)=>a+b,0)/ds.length).toFixed(2):"—")+" days.");safe("allClosedBuckets",n=>n.innerHTML=buckets.map((b,i)=>'<button class="chart-item" data-band="'+i+'">'+b[0]+": "+closedRows.filter(r=>bucket(duration(r))===i).length+" tickets</button>").join(""));renderTable(filtered)}
+function fillAndRender(){populateFilters();renderAll()}
+function importFile(){const file=$("csvFile")?.files?.[0];if(!file){showStatus("Choose a CSV file first","error");return}showStatus("Reading file…","info");const reader=new FileReader();reader.onload=()=>{let parsed;try{parsed=parse(reader.result);rows=parsed.result;closureField=headers.find(h=>/closed at|closure date|resolved at|resolution date/i.test(h))||null;headers=Object.keys(rows[0]||{});drill=null;page=1;$("emptyPrompt").hidden=true;$("dashboard").hidden=false;$("filterBar").hidden=false;fillAndRender();$("exportFiltered").disabled=false;showStatus("Loaded "+file.name+": "+rows.length+" tickets imported","success")}catch(e){let d=parsed?parsed.delimiter:delimiterOf(String(reader.result||""));let names=headers.length?headers.join(" | "):"not available";showStatus((e.message||String(e))+" · Detected delimiter: "+(d==="\t"?"tab":d)+" · Parsed headers: "+names,"error")}};reader.onerror=()=>showStatus("Could not read "+file.name+": "+(reader.error?.message||"File read error"),"error");reader.onabort=()=>showStatus("Reading file was cancelled","error");try{reader.readAsText(file)}catch(e){showStatus("Could not read file: "+e.message,"error")}}
+$("csvFile")?.addEventListener("change",importFile);$("loadCsv")?.addEventListener("click",importFile);
+const binds=[["businessFilter"],["statusFilter"],["priorityFilter"],["categoryFilter"],["questionFilter"],["companyFilter"],["callerFilter"],["assigneeFilter"],["waitingFilter"],["createdFrom"],["createdTo"]];binds.forEach(([id])=>$(id)?.addEventListener("change",()=>{drill=null;page=1;renderAll()}));["idSearch","searchFilter"].forEach(id=>$(id)?.addEventListener("input",()=>{drill=null;page=1;renderAll()}));
+$("clearFilters")?.addEventListener("click",()=>{document.querySelectorAll("#filterBar input").forEach(x=>x.value="");document.querySelectorAll("#filterBar select").forEach(x=>x.selectedIndex=0);drill=null;page=1;renderAll()});
+$("pageSize")?.addEventListener("change",()=>{page=1;renderTable(filtered)});$("prevPage")?.addEventListener("click",()=>{page--;renderTable(filtered)});$("nextPage")?.addEventListener("click",()=>{page++;renderTable(filtered)});
+$("tableHead")?.addEventListener("click",e=>{let b=e.target.closest("button[data-sort]");if(b){sortAsc=sortKey===b.dataset.sort?!sortAsc:true;sortKey=b.dataset.sort;page=1;renderTable(filtered)}});
+$("closeDialog")?.addEventListener("click",()=> $("ticketDialog")?.close());
+$("saveFollowup")?.addEventListener("click",()=>{if(!selected)return;let data={};try{data=JSON.parse(localStorage.getItem("executiveTicketDashboard.followups.v2")||"{}")}catch{}data[selected.Number]={progress:$("followProgress")?.value||"Not started",notes:$("followNotes")?.value||"",updatedAt:new Date().toISOString()};try{localStorage.setItem("executiveTicketDashboard.followups.v2",JSON.stringify(data));showStatus("Follow-up saved in this browser","success")}catch(e){showStatus("Could not save local follow-up: "+e.message,"error")}});
+function openDetails(r){selected=r;safe("dialogTitle",n=>n.textContent="Ticket "+(r.Number||"details"));safe("detailMeta",n=>n.textContent=closed(r)?"; elapsed "+(duration(r)==null?"unavailable":duration(r).toFixed(2)+" days"):"");safe("detailFields",n=>n.innerHTML=headers.map(h=>'<div class="detail-field"><b>'+esc(h)+'</b>'+esc(r[h]||"—")+'</div>').join(""));let f={};try{f=JSON.parse(localStorage.getItem("executiveTicketDashboard.followups.v2")||"{}")[r.Number]||{}}catch{}if($("followProgress"))$("followProgress").value=f.progress||"Not started";if($("followNotes"))$("followNotes").value=f.notes||"";$("ticketDialog")?.showModal()}
+$("exportFiltered")?.addEventListener("click",()=>{let quote=x=>'"'+String(x??"").replace(/"/g,'""')+'"';let csv=[headers.map(quote).join(","),...filtered.map(r=>headers.map(h=>quote(r[h])).join(","))].join("\r\n");download("filtered_tickets.csv",csv)});
+$("exportFollowups")?.addEventListener("click",()=>{let data={};try{data=JSON.parse(localStorage.getItem("executiveTicketDashboard.followups.v2")||"{}")}catch{}let list=Object.entries(data).map(([Number,x])=>({Number,"Follow-up progress":x.progress||"",Notes:x.notes||"","Saved at":x.updatedAt||""}));download("ticket_followup_tracker.csv",["Number,Follow-up progress,Notes,Saved at",...list.map(x=>[x.Number,x["Follow-up progress"],x.Notes,x["Saved at"]].map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(","))].join("\r\n"))});
+function download(name,text){let a=document.createElement("a"),u=URL.createObjectURL(new Blob(["\uFEFF",text],{type:"text/csv;charset=utf-8"}));a.href=u;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(u),1000)}
+}, {once:true});
+</script>
+</body>
+</html>
